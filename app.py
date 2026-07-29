@@ -10,7 +10,7 @@ import streamlit as st
 
 
 APP_NAME = "Naval Load Line Studio"
-APP_VERSION = "0.2"
+APP_VERSION = "0.3"
 PROJECT_FILE_EXTENSION = ".nlls"
 
 st.set_page_config(
@@ -281,6 +281,49 @@ def apply_styles() -> None:
             div[data-baseweb="select"] > div,
             div[data-baseweb="textarea"] > div {
                 border-radius: 10px;
+            }
+
+
+            .result-card {
+                background: #FFFFFF;
+                border: 1px solid var(--border);
+                border-left: 7px solid var(--steel-blue);
+                border-radius: 16px;
+                padding: 24px;
+                box-shadow: 0 10px 28px rgba(7, 26, 43, 0.07);
+                margin-top: 16px;
+            }
+
+            .result-card.applies {
+                border-left-color: var(--green);
+            }
+
+            .result-card.excluded {
+                border-left-color: var(--steel-gray);
+            }
+
+            .result-card.review {
+                border-left-color: var(--yellow);
+            }
+
+            .result-title {
+                color: var(--navy);
+                font-size: 24px;
+                font-weight: 850;
+                margin-bottom: 8px;
+            }
+
+            .result-reference {
+                color: var(--steel-blue);
+                font-size: 14px;
+                font-weight: 750;
+                margin-bottom: 12px;
+            }
+
+            .result-text {
+                color: #34495A;
+                font-size: 15px;
+                line-height: 1.65;
             }
 
             @media (max-width: 700px) {
@@ -898,6 +941,170 @@ def render_placeholder(
     footer()
 
 
+def evaluate_applicability(
+    international_voyage: str,
+    convention_flag_status: str,
+    vessel_category: str,
+    ship_condition: str,
+    length_m: float,
+    gross_tonnage: float,
+    navigation_area: str,
+    exemption_status: str,
+) -> dict[str, Any]:
+    """Preliminary applicability decision based on Articles IV, V and VI.
+
+    This module is an engineering screening tool. Formal exemptions and final
+    statutory determinations remain under the competent Administration.
+    """
+    reasons: list[str] = []
+    references: list[str] = []
+
+    if international_voyage == "No":
+        return {
+            "status": "Convention Does Not Apply",
+            "status_code": "excluded",
+            "reason": (
+                "The Convention applies to ships engaged on international "
+                "voyages. The declared operation is not an international voyage."
+            ),
+            "references": ["Article IV(2)"],
+            "requires_authority": False,
+        }
+
+    if convention_flag_status == "No / Unknown":
+        return {
+            "status": "Technical Review Required",
+            "status_code": "review",
+            "reason": (
+                "The ship's registration or flag relationship with a "
+                "Contracting Government has not been confirmed. Applicability "
+                "cannot be concluded automatically."
+            ),
+            "references": ["Article IV(1)"],
+            "requires_authority": True,
+        }
+
+    category_exclusions = {
+        "Warship": "Warships are excluded from the Convention.",
+        "Non-commercial pleasure yacht": (
+            "Pleasure yachts not engaged in trade are excluded."
+        ),
+        "Fishing vessel": "Fishing vessels are excluded from the Convention.",
+    }
+
+    if vessel_category in category_exclusions:
+        return {
+            "status": "Convention Does Not Apply",
+            "status_code": "excluded",
+            "reason": category_exclusions[vessel_category],
+            "references": ["Article V(1)"],
+            "requires_authority": False,
+        }
+
+    if ship_condition == "New ship" and length_m < 24.0:
+        return {
+            "status": "Convention Does Not Apply",
+            "status_code": "excluded",
+            "reason": (
+                "A new ship with Convention length below 24 m is excluded."
+            ),
+            "references": ["Article V(1)(b)"],
+            "requires_authority": False,
+        }
+
+    if ship_condition == "Existing ship" and gross_tonnage < 150.0:
+        return {
+            "status": "Convention Does Not Apply",
+            "status_code": "excluded",
+            "reason": (
+                "An existing ship with gross tonnage below 150 is excluded."
+            ),
+            "references": ["Article V(1)(c)"],
+            "requires_authority": False,
+        }
+
+    excluded_navigation_areas = {
+        "North American Great Lakes / specified St. Lawrence area",
+        "Caspian Sea",
+        "Río de la Plata, Paraná and Uruguay specified area",
+    }
+
+    if navigation_area in excluded_navigation_areas:
+        return {
+            "status": "Convention Does Not Apply",
+            "status_code": "excluded",
+            "reason": (
+                "The vessel is declared to operate exclusively within a "
+                "navigation area expressly excepted by the Convention."
+            ),
+            "references": ["Article V(2)"],
+            "requires_authority": False,
+        }
+
+    if exemption_status != "No exemption claimed":
+        return {
+            "status": "Technical Review Required",
+            "status_code": "review",
+            "reason": (
+                "A possible exemption has been declared. Exemptions under "
+                "Article VI require acceptance or determination by the "
+                "Administration and, where applicable, the Governments concerned."
+            ),
+            "references": ["Article VI"],
+            "requires_authority": True,
+        }
+
+    reasons.append(
+        "The ship is declared to undertake international voyages and no "
+        "automatic exception has been identified."
+    )
+    references.extend(["Article IV", "Article V"])
+
+    if ship_condition == "Existing ship":
+        reasons.append(
+            "As an existing ship, the detailed technical requirements may be "
+            "subject to the minimum provisions and conditions described in "
+            "Article IV(4)."
+        )
+        references.append("Article IV(4)")
+
+    return {
+        "status": "Convention Applies",
+        "status_code": "applies",
+        "reason": " ".join(reasons),
+        "references": references,
+        "requires_authority": False,
+    }
+
+
+def render_applicability_result(result: dict[str, Any]) -> None:
+    references = " · ".join(result.get("references", []))
+    st.markdown(
+        dedent(
+            f"""
+            <div class="result-card {result['status_code']}">
+                <div class="result-title">{result['status']}</div>
+                <div class="result-reference">Regulatory basis: {references}</div>
+                <div class="result-text">{result['reason']}</div>
+            </div>
+            """
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if result.get("requires_authority"):
+        st.warning(
+            "This outcome cannot be closed solely by the application. "
+            "Confirmation from the competent Administration is required."
+        )
+    else:
+        st.info(
+            "This is a preliminary engineering screening. The flag "
+            "Administration and applicable statutory documents remain the "
+            "authoritative basis for certification."
+        )
+
+
 def render_applicability() -> None:
     if not st.session_state.project_data:
         st.warning("Create or open a project before continuing.")
@@ -905,15 +1112,289 @@ def render_applicability() -> None:
             go_to("new_project")
         return
 
-    render_placeholder(
-        "Applicability Assessment",
-        (
-            "This will be the next regulatory module. It will determine "
-            "whether the International Convention on Load Lines applies "
-            "to the selected ship and document the basis of the decision."
+    top_left, top_right = st.columns([5, 1])
+    with top_right:
+        if st.button("← Home", use_container_width=True):
+            go_to("home")
+
+    project = st.session_state.project_data
+    existing = project.get("applicability_assessment", {})
+
+    st.markdown(
+        dedent(
+            f"""
+            <div class="step-label">Project workflow · Step 2</div>
+            <div class="module-title">Applicability Assessment</div>
+            <div class="module-subtitle">
+                Preliminary determination for <strong>{project.get('ship_name', 'the ship')}</strong>
+                under Articles IV, V and VI of the International Convention
+                on Load Lines, 1966, as modified by the 1988 Protocol.
+            </div>
+            """
         ),
-        badge="VERSION 0.3 — NEXT MODULE",
+        unsafe_allow_html=True,
     )
+
+    st.write("")
+
+    with st.form("applicability_form", clear_on_submit=False):
+        st.subheader("Operational Scope")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            international_voyage = st.radio(
+                "Will the ship undertake international voyages? *",
+                ["Yes", "No"],
+                index=0 if existing.get("international_voyage", "Yes") == "Yes" else 1,
+                help=(
+                    "An international voyage is a sea voyage between a country "
+                    "to which the Convention applies and a port outside that country, "
+                    "or conversely."
+                ),
+            )
+
+            convention_flag_status = st.radio(
+                "Is the ship registered in, or entitled to fly the flag of, a Contracting Government? *",
+                ["Yes", "No / Unknown"],
+                index=0 if existing.get("convention_flag_status", "Yes") == "Yes" else 1,
+            )
+
+        with c2:
+            navigation_area_options = [
+                "General international navigation",
+                "North American Great Lakes / specified St. Lawrence area",
+                "Caspian Sea",
+                "Río de la Plata, Paraná and Uruguay specified area",
+            ]
+            navigation_area = st.selectbox(
+                "Exclusive navigation area *",
+                navigation_area_options,
+                index=(
+                    navigation_area_options.index(
+                        existing.get(
+                            "navigation_area",
+                            "General international navigation",
+                        )
+                    )
+                    if existing.get(
+                        "navigation_area",
+                        "General international navigation",
+                    )
+                    in navigation_area_options
+                    else 0
+                ),
+            )
+
+            exemption_options = [
+                "No exemption claimed",
+                "Voyages between nearby ports of two or more States",
+                "Ship with novel features requiring exemption",
+                "Single international voyage under special conditions",
+                "Other exemption or Administration decision",
+            ]
+            exemption_status = st.selectbox(
+                "Possible exemption under Article VI",
+                exemption_options,
+                index=(
+                    exemption_options.index(
+                        existing.get(
+                            "exemption_status",
+                            "No exemption claimed",
+                        )
+                    )
+                    if existing.get(
+                        "exemption_status",
+                        "No exemption claimed",
+                    )
+                    in exemption_options
+                    else 0
+                ),
+            )
+
+        st.divider()
+        st.subheader("Ship Status and Automatic Exceptions")
+
+        c3, c4 = st.columns(2)
+        with c3:
+            vessel_category_options = [
+                "Commercial ship / other ship",
+                "Warship",
+                "Fishing vessel",
+                "Non-commercial pleasure yacht",
+            ]
+            vessel_category = st.selectbox(
+                "Vessel category *",
+                vessel_category_options,
+                index=(
+                    vessel_category_options.index(
+                        existing.get(
+                            "vessel_category",
+                            "Commercial ship / other ship",
+                        )
+                    )
+                    if existing.get(
+                        "vessel_category",
+                        "Commercial ship / other ship",
+                    )
+                    in vessel_category_options
+                    else 0
+                ),
+            )
+
+            ship_condition = st.radio(
+                "Convention status of the ship *",
+                ["New ship", "Existing ship", "Not yet determined"],
+                index=(
+                    ["New ship", "Existing ship", "Not yet determined"].index(
+                        existing.get("ship_condition", "New ship")
+                    )
+                    if existing.get("ship_condition", "New ship")
+                    in ["New ship", "Existing ship", "Not yet determined"]
+                    else 0
+                ),
+                help=(
+                    "The formal distinction depends on the keel-laying or "
+                    "equivalent construction date relative to the Convention's "
+                    "entry into force for the relevant Contracting Government."
+                ),
+            )
+
+        with c4:
+            length_m = st.number_input(
+                "Convention length L [m] *",
+                min_value=0.0,
+                value=float(existing.get("length_m", 24.0)),
+                step=0.1,
+                format="%.2f",
+                help=(
+                    "Use the length L defined in Article II(8), not LOA or Lpp "
+                    "unless they coincide with the Convention definition."
+                ),
+            )
+
+            gross_tonnage = st.number_input(
+                "Gross tonnage [GT] *",
+                min_value=0.0,
+                value=float(existing.get("gross_tonnage", 150.0)),
+                step=1.0,
+                help=(
+                    "This value is used for the Article V exception applicable "
+                    "to existing ships below 150 gross tons."
+                ),
+            )
+
+        assessment_notes = st.text_area(
+            "Assessment notes",
+            value=existing.get("assessment_notes", ""),
+            placeholder=(
+                "Record flag Administration evidence, voyage description, "
+                "exemption documents or other relevant observations."
+            ),
+            height=110,
+        )
+
+        submitted = st.form_submit_button(
+            "Evaluate Applicability",
+            use_container_width=True,
+        )
+
+    if submitted:
+        if ship_condition == "Not yet determined":
+            result = {
+                "status": "Technical Review Required",
+                "status_code": "review",
+                "reason": (
+                    "The ship has not yet been classified as new or existing. "
+                    "This distinction is necessary to evaluate the automatic "
+                    "length and tonnage exceptions and the technical regime "
+                    "applicable to the ship."
+                ),
+                "references": ["Article II(6) and II(7)", "Article IV", "Article V"],
+                "requires_authority": True,
+            }
+        else:
+            result = evaluate_applicability(
+                international_voyage=international_voyage,
+                convention_flag_status=convention_flag_status,
+                vessel_category=vessel_category,
+                ship_condition=ship_condition,
+                length_m=length_m,
+                gross_tonnage=gross_tonnage,
+                navigation_area=navigation_area,
+                exemption_status=exemption_status,
+            )
+
+        assessment = {
+            "evaluated_at": datetime.now().isoformat(timespec="seconds"),
+            "international_voyage": international_voyage,
+            "convention_flag_status": convention_flag_status,
+            "navigation_area": navigation_area,
+            "exemption_status": exemption_status,
+            "vessel_category": vessel_category,
+            "ship_condition": ship_condition,
+            "length_m": float(length_m),
+            "gross_tonnage": float(gross_tonnage),
+            "assessment_notes": assessment_notes.strip(),
+            "result": result,
+        }
+
+        project["applicability_assessment"] = assessment
+        project["assessment_status"] = result["status"]
+        project["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        st.session_state.project_data = project
+        st.session_state.project_saved = True
+        st.success("Applicability assessment saved in the current project.")
+
+    saved_assessment = st.session_state.project_data.get(
+        "applicability_assessment"
+    )
+
+    if saved_assessment:
+        st.write("")
+        render_applicability_result(saved_assessment["result"])
+
+        st.write("")
+        filename = (
+            clean_filename(project.get("project_name", "project"))
+            + PROJECT_FILE_EXTENSION
+        )
+
+        st.download_button(
+            "⬇️ Download updated project (.nlls)",
+            data=project_to_json(st.session_state.project_data),
+            file_name=filename,
+            mime="application/json",
+            use_container_width=True,
+        )
+
+        if saved_assessment["result"]["status"] == "Convention Applies":
+            if st.button(
+                "Continue to Principal Dimensions →",
+                use_container_width=True,
+            ):
+                st.info(
+                    "The Principal Dimensions module will be incorporated "
+                    "in Version 0.4."
+                )
+
+    with st.expander("Regulatory scope used by this module"):
+        st.markdown(
+            """
+            - **Article IV:** scope of application, including ships engaged
+              on international voyages.
+            - **Article V:** automatic exceptions for warships, certain small
+              new or existing ships, non-commercial pleasure yachts, fishing
+              vessels and ships navigating exclusively in specified areas.
+            - **Article VI:** exemptions that require a determination by the
+              Administration and, where applicable, the Governments concerned.
+            """
+        )
+        st.caption(
+            "The module does not issue a statutory certificate or approve an "
+            "exemption. It records a preliminary engineering decision."
+        )
+
+    footer()
 
 
 def main() -> None:
